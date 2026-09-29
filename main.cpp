@@ -1,0 +1,473 @@
+#include <iostream>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <vector>
+#include <memory>
+#include <map>
+#include <cctype>
+#include <stdexcept>
+
+using namespace std;
+
+enum class TokenType {
+    Keyword, IntType, FloatType, Identifier, Number, Decimal,
+    Assign, Plus, Minus, Star, Slash,
+    Semicolon, LParen, RParen, LBrace, RBrace,
+    Less, Greater, LessEqual, GreaterEqual, Equal, NotEqual,
+    End, Invalid
+};
+
+struct Token {
+    TokenType type;
+    string text;
+    int line;
+};
+
+class Lexer {
+    string source;
+    size_t pos = 0;
+    int line = 1;
+
+    bool atEnd() const { return pos >= source.size(); }
+    char peek(size_t offset = 0) const {
+        return pos + offset < source.size() ? source[pos + offset] : '\0';
+    }
+    Token make(TokenType t, const string& s, int ln) {
+        return Token{t, s, ln};
+    }
+
+public:
+    explicit Lexer(string s) : source(std::move(s)) {}
+
+    vector<Token> tokenize() {
+        vector<Token> out;
+        while (!atEnd()) {
+            char c = peek();
+            if (c == ' ' || c == '\t' || c == '\r') { ++pos; continue; }
+            if (c == '\n') { ++line; ++pos; continue; }
+
+            int tokenLine = line;
+
+            // Single-line comments: // ... or # ...
+            if (c == '#' || (c == '/' && peek(1) == '/')) {
+                if (c == '#') {
+                    while (!atEnd() && peek() != '\n') ++pos;
+                } else {
+                    pos += 2;
+                    while (!atEnd() && peek() != '\n') ++pos;
+                }
+                continue;
+            }
+
+            if (isdigit(static_cast<unsigned char>(c))) {
+                string number;
+                while (isdigit(static_cast<unsigned char>(peek()))) {
+                    number += peek(); ++pos;
+                }
+                if (peek() == '.' && isdigit(static_cast<unsigned char>(peek(1)))) {
+                    number += peek(); ++pos;
+                    while (isdigit(static_cast<unsigned char>(peek()))) {
+                        number += peek(); ++pos;
+                    }
+                    out.push_back(make(TokenType::Decimal, number, tokenLine));
+                } else {
+                    out.push_back(make(TokenType::Number, number, tokenLine));
+                }
+                continue;
+            }
+
+            // ASCII identifiers and UTF-8 Bangla words. Non-ASCII bytes are
+            // consumed as part of a word; punctuation remains ASCII.
+            if (isalpha(static_cast<unsigned char>(c)) || c == '_' ||
+                static_cast<unsigned char>(c) >= 128) {
+                string word;
+                while (!atEnd()) {
+                    unsigned char ch = static_cast<unsigned char>(peek());
+                    if (isalnum(ch) || ch == '_' || ch >= 128) {
+                        word += peek(); ++pos;
+                    } else break;
+                }
+                if (word == "ধরি") out.push_back(make(TokenType::Keyword, word, tokenLine));
+                else if (word == "যদি" || word == "নাহলে" || word == "যতক্ষণ" ||
+                         word == "দেখাও")
+                    out.push_back(make(TokenType::Keyword, word, tokenLine));
+                else if (word == "সংখ্যা") out.push_back(make(TokenType::IntType, word, tokenLine));
+                else if (word == "দশমিক") out.push_back(make(TokenType::FloatType, word, tokenLine));
+                else out.push_back(make(TokenType::Identifier, word, tokenLine));
+                continue;
+            }
+
+            switch (c) {
+                case '=':
+                    if (peek(1) == '=') { out.push_back(make(TokenType::Equal, "==", tokenLine)); pos += 2; }
+                    else { out.push_back(make(TokenType::Assign, "=", tokenLine)); ++pos; }
+                    break;
+                case '!':
+                    if (peek(1) == '=') { out.push_back(make(TokenType::NotEqual, "!=", tokenLine)); pos += 2; }
+                    else { out.push_back(make(TokenType::Invalid, "!", tokenLine)); ++pos; }
+                    break;
+                case '<':
+                    if (peek(1) == '=') { out.push_back(make(TokenType::LessEqual, "<=", tokenLine)); pos += 2; }
+                    else { out.push_back(make(TokenType::Less, "<", tokenLine)); ++pos; }
+                    break;
+                case '>':
+                    if (peek(1) == '=') { out.push_back(make(TokenType::GreaterEqual, ">=", tokenLine)); pos += 2; }
+                    else { out.push_back(make(TokenType::Greater, ">", tokenLine)); ++pos; }
+                    break;
+                case '+': out.push_back(make(TokenType::Plus, "+", tokenLine)); ++pos; break;
+                case '-': out.push_back(make(TokenType::Minus, "-", tokenLine)); ++pos; break;
+                case '*': out.push_back(make(TokenType::Star, "*", tokenLine)); ++pos; break;
+                case '/': out.push_back(make(TokenType::Slash, "/", tokenLine)); ++pos; break;
+                case ';': out.push_back(make(TokenType::Semicolon, ";", tokenLine)); ++pos; break;
+                case '(': out.push_back(make(TokenType::LParen, "(", tokenLine)); ++pos; break;
+                case ')': out.push_back(make(TokenType::RParen, ")", tokenLine)); ++pos; break;
+                case '{': out.push_back(make(TokenType::LBrace, "{", tokenLine)); ++pos; break;
+                case '}': out.push_back(make(TokenType::RBrace, "}", tokenLine)); ++pos; break;
+                default: out.push_back(make(TokenType::Invalid, string(1,c), tokenLine)); ++pos; break;
+            }
+        }
+        out.push_back(make(TokenType::End, "", line));
+        return out;
+    }
+};
+
+enum class ValueType { Integer, Decimal, Unknown };
+
+struct Expr {
+    enum Kind { Literal, Variable, Unary, Binary } kind;
+    string value;
+    unique_ptr<Expr> left, right;
+    Expr(Kind k, string v = "") : kind(k), value(std::move(v)) {}
+};
+
+struct Stmt {
+    enum Kind { Declaration, Assignment, Print, If, While } kind;
+    string name;
+    ValueType declaredType = ValueType::Unknown;
+    unique_ptr<Expr> expr, condition;
+    vector<unique_ptr<Stmt>> body, elseBody;
+    Stmt(Kind k) : kind(k) {}
+};
+
+class ParseError : public runtime_error {
+public:
+    int line;
+    ParseError(int ln, const string& msg) : runtime_error(msg), line(ln) {}
+};
+
+class Parser {
+    vector<Token> tokens;
+    size_t pos = 0;
+    bool hadError = false;
+
+    const Token& current() const { return tokens[pos < tokens.size() ? pos : tokens.size()-1]; }
+    bool check(TokenType t) const { return current().type == t; }
+    Token advance() { Token t=current(); if (!check(TokenType::End)) ++pos; return t; }
+    bool match(TokenType t) { if (check(t)) { advance(); return true; } return false; }
+    Token expect(TokenType t, const string& msg) {
+        if (check(t)) return advance();
+        throw ParseError(current().line, msg);
+    }
+    void synchronize() {
+        while (!check(TokenType::End)) {
+            if (match(TokenType::Semicolon)) return;
+            if (check(TokenType::RBrace)) return;
+            if (check(TokenType::Keyword)) return;
+            advance();
+        }
+    }
+    unique_ptr<Expr> primary() {
+        if (match(TokenType::Number)) return make_unique<Expr>(Expr::Literal, tokens[pos-1].text);
+        if (match(TokenType::Decimal)) return make_unique<Expr>(Expr::Literal, tokens[pos-1].text);
+        if (match(TokenType::Identifier)) return make_unique<Expr>(Expr::Variable, tokens[pos-1].text);
+        if (match(TokenType::LParen)) {
+            auto e = expression();
+            expect(TokenType::RParen, "Expected ')'");
+            return e;
+        }
+        throw ParseError(current().line, "Expected a number, variable, or '('");
+    }
+    unique_ptr<Expr> unary() {
+        if (match(TokenType::Minus)) {
+            auto e=make_unique<Expr>(Expr::Unary, "-");
+            e->right=unary(); return e;
+        }
+        return primary();
+    }
+    unique_ptr<Expr> factor() {
+        auto e=unary();
+        while (check(TokenType::Star) || check(TokenType::Slash)) {
+            string op=advance().text;
+            auto n=make_unique<Expr>(Expr::Binary,op);
+            n->left=std::move(e); n->right=unary(); e=std::move(n);
+        }
+        return e;
+    }
+    unique_ptr<Expr> expression() {
+        auto e=factor();
+        while (check(TokenType::Plus) || check(TokenType::Minus)) {
+            string op=advance().text;
+            auto n=make_unique<Expr>(Expr::Binary,op);
+            n->left=std::move(e); n->right=factor(); e=std::move(n);
+        }
+        return e;
+    }
+    unique_ptr<Expr> condition() {
+        auto left=expression();
+        if (check(TokenType::Less) || check(TokenType::Greater) ||
+            check(TokenType::LessEqual) || check(TokenType::GreaterEqual) ||
+            check(TokenType::Equal) || check(TokenType::NotEqual)) {
+            string op=advance().text;
+            auto n=make_unique<Expr>(Expr::Binary,op);
+            n->left=std::move(left); n->right=expression(); return n;
+        }
+        throw ParseError(current().line, "Expected a comparison operator");
+    }
+    vector<unique_ptr<Stmt>> block() {
+        expect(TokenType::LBrace, "Expected '{'");
+        vector<unique_ptr<Stmt>> list;
+        while (!check(TokenType::RBrace) && !check(TokenType::End)) {
+            size_t before=pos;
+            try { list.push_back(statement()); }
+            catch (const ParseError& e) {
+                hadError=true;
+                cerr << "Syntax Error at line " << e.line << ": " << e.what() << '\n';
+                synchronize();
+            }
+            if (pos==before && !check(TokenType::End)) advance();
+        }
+        expect(TokenType::RBrace, "Expected '}'");
+        return list;
+    }
+    unique_ptr<Stmt> statement() {
+        if (check(TokenType::Keyword) && current().text=="ধরি") {
+            advance();
+            auto s=make_unique<Stmt>(Stmt::Declaration);
+            if (match(TokenType::IntType)) s->declaredType=ValueType::Integer;
+            else if (match(TokenType::FloatType)) s->declaredType=ValueType::Decimal;
+            else throw ParseError(current().line,"Expected data type 'সংখ্যা' or 'দশমিক'");
+            s->name=expect(TokenType::Identifier,"Expected variable name").text;
+            expect(TokenType::Assign,"Expected '='");
+            s->expr=expression();
+            expect(TokenType::Semicolon,"Expected ';'");
+            return s;
+        }
+        if (check(TokenType::Keyword) && current().text=="দেখাও") {
+            advance();
+            auto s=make_unique<Stmt>(Stmt::Print);
+            expect(TokenType::LParen,"Expected '(' after দেখাও");
+            s->expr=expression();
+            expect(TokenType::RParen,"Expected ')'");
+            expect(TokenType::Semicolon,"Expected ';'");
+            return s;
+        }
+        if (check(TokenType::Keyword) && current().text=="যদি") {
+            advance();
+            auto s=make_unique<Stmt>(Stmt::If);
+            expect(TokenType::LParen,"Expected '(' after যদি");
+            s->condition=condition();
+            expect(TokenType::RParen,"Expected ')'");
+            s->body=block();
+            if (check(TokenType::Keyword) && current().text=="নাহলে") {
+                advance(); s->elseBody=block();
+            }
+            return s;
+        }
+        if (check(TokenType::Keyword) && current().text=="যতক্ষণ") {
+            advance();
+            auto s=make_unique<Stmt>(Stmt::While);
+            expect(TokenType::LParen,"Expected '(' after যতক্ষণ");
+            s->condition=condition();
+            expect(TokenType::RParen,"Expected ')'");
+            s->body=block();
+            return s;
+        }
+        if (check(TokenType::Identifier)) {
+            auto s=make_unique<Stmt>(Stmt::Assignment);
+            s->name=advance().text;
+            expect(TokenType::Assign,"Expected '=' after variable name");
+            s->expr=expression();
+            expect(TokenType::Semicolon,"Expected ';'");
+            return s;
+        }
+        if (check(TokenType::Invalid))
+            throw ParseError(current().line,"Invalid character: " + current().text);
+        throw ParseError(current().line,"Unexpected token: " + current().text);
+    }
+
+public:
+    explicit Parser(vector<Token> t) : tokens(std::move(t)) {}
+    vector<unique_ptr<Stmt>> parse() {
+        vector<unique_ptr<Stmt>> result;
+        while (!check(TokenType::End)) {
+            size_t before=pos;
+            try { result.push_back(statement()); }
+            catch (const ParseError& e) {
+                hadError=true;
+                cerr << "Syntax Error at line " << e.line << ": " << e.what() << '\n';
+                synchronize();
+            }
+            if (pos==before && !check(TokenType::End)) advance();
+        }
+        if (hadError) throw runtime_error("Parsing failed due to syntax errors.");
+        return result;
+    }
+};
+
+class SemanticAnalyzer {
+    map<string,ValueType> symbols;
+    bool hadError=false;
+
+    void report(const string& msg,int line) {
+        cerr << "Semantic Error at line " << line << ": " << msg << '\n';
+        hadError=true;
+    }
+    ValueType exprType(const Expr* e,int line) {
+        if (!e) return ValueType::Unknown;
+        if (e->kind==Expr::Literal) {
+            return e->value.find('.')==string::npos ? ValueType::Integer : ValueType::Decimal;
+        }
+        if (e->kind==Expr::Variable) {
+            auto it=symbols.find(e->value);
+            if (it==symbols.end()) { report("Undeclared variable '" + e->value + "'",line); return ValueType::Unknown; }
+            return it->second;
+        }
+        if (e->kind==Expr::Unary) return exprType(e->right.get(),line);
+        ValueType a=exprType(e->left.get(),line);
+        ValueType b=exprType(e->right.get(),line);
+        if (e->value=="<" || e->value==">" || e->value=="<=" ||
+            e->value==">=" || e->value=="==" || e->value=="!=") {
+            if (a==ValueType::Unknown || b==ValueType::Unknown) return ValueType::Unknown;
+            return ValueType::Integer; // conditions are represented as numeric truth values
+        }
+        if (e->value=="/") return ValueType::Decimal;
+        if (a==ValueType::Decimal || b==ValueType::Decimal) return ValueType::Decimal;
+        if (a==ValueType::Unknown || b==ValueType::Unknown) return ValueType::Unknown;
+        return ValueType::Integer;
+    }
+    void checkExpr(const Expr* e,int line) { (void)exprType(e,line); }
+    void checkList(const vector<unique_ptr<Stmt>>& list) {
+        for (const auto& s:list) checkStmt(s.get());
+    }
+    void checkStmt(const Stmt* s) {
+        if (s->kind==Stmt::Declaration) {
+            if (symbols.count(s->name)) {
+                report("Variable '" + s->name + "' is already declared",0);
+                return;
+            }
+            ValueType actual=exprType(s->expr.get(),0);
+            if (s->declaredType==ValueType::Integer && actual==ValueType::Decimal)
+                report("Cannot assign decimal expression to সংখ্যা variable '" + s->name + "'",0);
+            symbols[s->name]=s->declaredType;
+        } else if (s->kind==Stmt::Assignment) {
+            auto it=symbols.find(s->name);
+            if (it==symbols.end()) {
+                report("Undeclared variable '" + s->name + "'",0);
+            } else {
+                ValueType actual=exprType(s->expr.get(),0);
+                if (it->second==ValueType::Integer && actual==ValueType::Decimal)
+                    report("Cannot assign decimal expression to সংখ্যা variable '" + s->name + "'",0);
+            }
+        } else if (s->kind==Stmt::Print) {
+            checkExpr(s->expr.get(),0);
+        } else {
+            checkExpr(s->condition.get(),0);
+            checkList(s->body);
+            checkList(s->elseBody);
+        }
+    }
+
+public:
+    bool analyze(const vector<unique_ptr<Stmt>>& program) {
+        checkList(program);
+        return !hadError;
+    }
+};
+
+class CodeGenerator {
+    string indent(int n) const { return string(n*4,' '); }
+    string expr(const Expr* e) const {
+        if (e->kind==Expr::Literal || e->kind==Expr::Variable) return e->value;
+        if (e->kind==Expr::Unary) return "(-" + expr(e->right.get()) + ")";
+        return "(" + expr(e->left.get()) + " " + e->value + " " + expr(e->right.get()) + ")";
+    }
+    void emitList(const vector<unique_ptr<Stmt>>& list,ostringstream& out,int level) const {
+        for (const auto& s:list) emitStmt(s.get(),out,level);
+    }
+    void emitStmt(const Stmt* s,ostringstream& out,int level) const {
+        string pad=indent(level);
+        if (s->kind==Stmt::Declaration) {
+            out << pad << s->name << " = " << expr(s->expr.get()) << '\n';
+        } else if (s->kind==Stmt::Assignment) {
+            out << pad << s->name << " = " << expr(s->expr.get()) << '\n';
+        } else if (s->kind==Stmt::Print) {
+            out << pad << "print(" << expr(s->expr.get()) << ")\n";
+        } else if (s->kind==Stmt::If) {
+            out << pad << "if " << expr(s->condition.get()) << ":\n";
+            if (s->body.empty()) out << indent(level+1) << "pass\n";
+            else emitList(s->body,out,level+1);
+            if (!s->elseBody.empty()) {
+                out << pad << "else:\n";
+                emitList(s->elseBody,out,level+1);
+            }
+        } else if (s->kind==Stmt::While) {
+            out << pad << "while " << expr(s->condition.get()) << ":\n";
+            if (s->body.empty()) out << indent(level+1) << "pass\n";
+            else emitList(s->body,out,level+1);
+        }
+    }
+public:
+    string generate(const vector<unique_ptr<Stmt>>& program) const {
+        ostringstream out;
+        out << "# Generated by BanglaCode Compiler\n";
+        emitList(program,out,0);
+        return out.str();
+    }
+};
+
+int main(int argc,char* argv[]) {
+    string inputPath = argc >= 2 ? argv[1] : "test.bangla";
+    string outputPath = argc >= 3 ? argv[2] : "generated.py";
+
+    ifstream input(inputPath, ios::binary);
+    if (!input) {
+        cerr << "Error: Cannot open source file: " << inputPath << '\n';
+        cerr << "Usage: BanglaCode.exe input.bangla [output.py]\n";
+        return 1;
+    }
+    stringstream buffer;
+    buffer << input.rdbuf();
+
+    try {
+        Lexer lexer(buffer.str());
+        vector<Token> tokens=lexer.tokenize();
+
+        Parser parser(tokens);
+        auto program=parser.parse();
+
+        SemanticAnalyzer semantic;
+        if (!semantic.analyze(program)) {
+            cerr << "Compilation failed: semantic errors found.\n";
+            return 1;
+        }
+
+        CodeGenerator generator;
+        string generated=generator.generate(program);
+
+        ofstream output(outputPath,ios::binary);
+        if (!output) {
+            cerr << "Error: Cannot write output file: " << outputPath << '\n';
+            return 1;
+        }
+        output << generated;
+        output.close();
+
+        cout << "Compilation successful!\n";
+        cout << "Generated Python file: " << outputPath << '\n';
+    } catch (const exception& e) {
+        cerr << e.what() << '\n';
+        return 1;
+    }
+    return 0;
+}
