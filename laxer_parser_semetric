@@ -1,551 +1,473 @@
 #include <iostream>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
-#include <unordered_map>
 #include <memory>
+#include <map>
 #include <cctype>
-#include <iomanip>
+#include <stdexcept>
 
-// 1. TOKEN DEFINITIONS
+using namespace std;
 
 enum class TokenType {
-    INTEGER, IDENTIFIER, INTEGER_LITERAL, ASSIGNMENT,
-    PTR, PLUS, MINUS, MULTIPLY, DIVIDE,
-    LEFT_PAREN, RIGHT_PAREN, EOF_TOKEN, UNKNOWN
+    Keyword, IntType, FloatType, Identifier, Number, Decimal,
+    Assign, Plus, Minus, Star, Slash,
+    Semicolon, LParen, RParen, LBrace, RBrace,
+    Less, Greater, LessEqual, GreaterEqual, Equal, NotEqual,
+    End, Invalid
 };
 
 struct Token {
     TokenType type;
-    std::string value;
+    string text;
     int line;
-
-    std::string toString() const {
-        if (value.empty()) {
-            return "< \"" + tokenTypeToString(type) + "\" >";
-        }
-        return "< \"" + tokenTypeToString(type) + " , " + value + "\" >";
-    }
-
-private:
-    std::string tokenTypeToString(TokenType t) const {
-        switch (t) {
-            case TokenType::INTEGER: return "INTEGER";
-            case TokenType::IDENTIFIER: return "IDENTIFIER";
-            case TokenType::INTEGER_LITERAL: return "INTEGER_LITERAL";
-            case TokenType::ASSIGNMENT: return "ASSIGNMENT";
-            case TokenType::PTR: return "Ptr";
-            case TokenType::PLUS: return "PLUS";
-            case TokenType::MINUS: return "MINUS";
-            case TokenType::MULTIPLY: return "MULTIPLY";
-            case TokenType::DIVIDE: return "DIVIDE";
-            case TokenType::LEFT_PAREN: return "LEFT_PAREN";
-            case TokenType::RIGHT_PAREN: return "RIGHT_PAREN";
-            case TokenType::EOF_TOKEN: return "EOF";
-            default: return "UNKNOWN";
-        }
-    }
 };
-
-
-// 2. LEXER
 
 class Lexer {
-private:
-    std::string code;
-    size_t pos;
-    int line;
-    std::vector<Token> tokens;
+    string source;
+    size_t pos = 0;
+    int line = 1;
 
-    char peek() { return (pos < code.length()) ? code[pos] : '\0'; }
-    
-    char advance() {
-        char c = peek();
-        if (c == '\n') line++;
-        pos++;
-        return c;
+    bool atEnd() const { return pos >= source.size(); }
+    char peek(size_t offset = 0) const {
+        return pos + offset < source.size() ? source[pos + offset] : '\0';
     }
-
-    void skipWhitespaceAndComments() {
-        while (std::isspace(peek())) advance();
-        if (peek() == '#') {
-            while (peek() != '\0' && peek() != '\n') advance();
-        }
+    Token make(TokenType t, const string& s, int ln) {
+        return Token{t, s, ln};
     }
 
 public:
-    Lexer(const std::string& src) : code(src), pos(0), line(1) {}
+    explicit Lexer(string s) : source(std::move(s)) {}
 
-    std::vector<Token> tokenize() {
-        while (peek() != '\0') {
-            skipWhitespaceAndComments();
-            if (peek() == '\0') break;
-            char ch = peek();
+    vector<Token> tokenize() {
+        vector<Token> out;
+        while (!atEnd()) {
+            char c = peek();
+            if (c == ' ' || c == '\t' || c == '\r') { ++pos; continue; }
+            if (c == '\n') { ++line; ++pos; continue; }
 
-            if (std::isdigit(ch)) {
-                std::string num = "";
-                while (std::isdigit(peek())) num += advance();
-                tokens.push_back({TokenType::INTEGER_LITERAL, num, line});
-            } 
-            else if (std::isalpha(ch) || ch == '_') {
-                std::string word = "";
-                while (std::isalnum(peek()) || peek() == '_') word += advance();
-                if (word == "integer") tokens.push_back({TokenType::INTEGER, "", line});
-                else if (word == "ptr") tokens.push_back({TokenType::PTR, "", line});
-                else tokens.push_back({TokenType::IDENTIFIER, word, line});
-            } 
-            else if (ch == ':') { tokens.push_back({TokenType::ASSIGNMENT, ":", line}); advance(); }
-            else if (ch == '+') { tokens.push_back({TokenType::PLUS, "+", line}); advance(); }
-            else if (ch == '-') { tokens.push_back({TokenType::MINUS, "-", line}); advance(); }
-            else if (ch == '*') { tokens.push_back({TokenType::MULTIPLY, "*", line}); advance(); }
-            else if (ch == '/') { tokens.push_back({TokenType::DIVIDE, "/", line}); advance(); }
-            else if (ch == '(') { tokens.push_back({TokenType::LEFT_PAREN, "(", line}); advance(); }
-            else if (ch == ')') { tokens.push_back({TokenType::RIGHT_PAREN, ")", line}); advance(); }
-            else {
-                std::cerr << "LexerError: Illegal char '" << ch << "' at line " << line << "\n";
-                while (peek() != '\0' && peek() != '\n') advance();
+            int tokenLine = line;
+
+            // Single-line comments: // ... or # ...
+            if (c == '#' || (c == '/' && peek(1) == '/')) {
+                if (c == '#') {
+                    while (!atEnd() && peek() != '\n') ++pos;
+                } else {
+                    pos += 2;
+                    while (!atEnd() && peek() != '\n') ++pos;
+                }
+                continue;
+            }
+
+            if (isdigit(static_cast<unsigned char>(c))) {
+                string number;
+                while (isdigit(static_cast<unsigned char>(peek()))) {
+                    number += peek(); ++pos;
+                }
+                if (peek() == '.' && isdigit(static_cast<unsigned char>(peek(1)))) {
+                    number += peek(); ++pos;
+                    while (isdigit(static_cast<unsigned char>(peek()))) {
+                        number += peek(); ++pos;
+                    }
+                    out.push_back(make(TokenType::Decimal, number, tokenLine));
+                } else {
+                    out.push_back(make(TokenType::Number, number, tokenLine));
+                }
+                continue;
+            }
+
+            // ASCII identifiers and UTF-8 Bangla words. Non-ASCII bytes are
+            // consumed as part of a word; punctuation remains ASCII.
+            if (isalpha(static_cast<unsigned char>(c)) || c == '_' ||
+                static_cast<unsigned char>(c) >= 128) {
+                string word;
+                while (!atEnd()) {
+                    unsigned char ch = static_cast<unsigned char>(peek());
+                    if (isalnum(ch) || ch == '_' || ch >= 128) {
+                        word += peek(); ++pos;
+                    } else break;
+                }
+                if (word == "ধরি") out.push_back(make(TokenType::Keyword, word, tokenLine));
+                else if (word == "যদি" || word == "নাহলে" || word == "যতক্ষণ" ||
+                         word == "দেখাও")
+                    out.push_back(make(TokenType::Keyword, word, tokenLine));
+                else if (word == "সংখ্যা") out.push_back(make(TokenType::IntType, word, tokenLine));
+                else if (word == "দশমিক") out.push_back(make(TokenType::FloatType, word, tokenLine));
+                else out.push_back(make(TokenType::Identifier, word, tokenLine));
+                continue;
+            }
+
+            switch (c) {
+                case '=':
+                    if (peek(1) == '=') { out.push_back(make(TokenType::Equal, "==", tokenLine)); pos += 2; }
+                    else { out.push_back(make(TokenType::Assign, "=", tokenLine)); ++pos; }
+                    break;
+                case '!':
+                    if (peek(1) == '=') { out.push_back(make(TokenType::NotEqual, "!=", tokenLine)); pos += 2; }
+                    else { out.push_back(make(TokenType::Invalid, "!", tokenLine)); ++pos; }
+                    break;
+                case '<':
+                    if (peek(1) == '=') { out.push_back(make(TokenType::LessEqual, "<=", tokenLine)); pos += 2; }
+                    else { out.push_back(make(TokenType::Less, "<", tokenLine)); ++pos; }
+                    break;
+                case '>':
+                    if (peek(1) == '=') { out.push_back(make(TokenType::GreaterEqual, ">=", tokenLine)); pos += 2; }
+                    else { out.push_back(make(TokenType::Greater, ">", tokenLine)); ++pos; }
+                    break;
+                case '+': out.push_back(make(TokenType::Plus, "+", tokenLine)); ++pos; break;
+                case '-': out.push_back(make(TokenType::Minus, "-", tokenLine)); ++pos; break;
+                case '*': out.push_back(make(TokenType::Star, "*", tokenLine)); ++pos; break;
+                case '/': out.push_back(make(TokenType::Slash, "/", tokenLine)); ++pos; break;
+                case ';': out.push_back(make(TokenType::Semicolon, ";", tokenLine)); ++pos; break;
+                case '(': out.push_back(make(TokenType::LParen, "(", tokenLine)); ++pos; break;
+                case ')': out.push_back(make(TokenType::RParen, ")", tokenLine)); ++pos; break;
+                case '{': out.push_back(make(TokenType::LBrace, "{", tokenLine)); ++pos; break;
+                case '}': out.push_back(make(TokenType::RBrace, "}", tokenLine)); ++pos; break;
+                default: out.push_back(make(TokenType::Invalid, string(1,c), tokenLine)); ++pos; break;
             }
         }
-        tokens.push_back({TokenType::EOF_TOKEN, "", line});
-        return tokens;
+        out.push_back(make(TokenType::End, "", line));
+        return out;
     }
 };
 
+enum class ValueType { Integer, Decimal, Unknown };
 
-// 3. AST NODES
-
-struct ASTNode {
-    virtual ~ASTNode() = default;
+struct Expr {
+    enum Kind { Literal, Variable, Unary, Binary } kind;
+    string value;
+    unique_ptr<Expr> left, right;
+    Expr(Kind k, string v = "") : kind(k), value(std::move(v)) {}
 };
 
-struct IntNode : public ASTNode {
-    std::string value;
-    IntNode(std::string v) : value(v) {}
+struct Stmt {
+    enum Kind { Declaration, Assignment, Print, If, While } kind;
+    string name;
+    ValueType declaredType = ValueType::Unknown;
+    unique_ptr<Expr> expr, condition;
+    vector<unique_ptr<Stmt>> body, elseBody;
+    Stmt(Kind k) : kind(k) {}
 };
 
-struct IdNode : public ASTNode {
-    std::string value;
-    IdNode(std::string v) : value(v) {}
+class ParseError : public runtime_error {
+public:
+    int line;
+    ParseError(int ln, const string& msg) : runtime_error(msg), line(ln) {}
 };
-
-struct BinOpNode : public ASTNode {
-    std::string op;
-    std::unique_ptr<ASTNode> left;
-    std::unique_ptr<ASTNode> right;
-    BinOpNode(std::string o, std::unique_ptr<ASTNode> l, std::unique_ptr<ASTNode> r) 
-        : op(o), left(std::move(l)), right(std::move(r)) {}
-};
-
-struct DecNode : public ASTNode {
-    std::string type;
-    std::string id;
-    std::unique_ptr<ASTNode> val;
-    DecNode(std::string t, std::string i, std::unique_ptr<ASTNode> v = nullptr) 
-        : type(t), id(i), val(std::move(v)) {}
-};
-
-struct AssignNode : public ASTNode {
-    std::string id;
-    std::unique_ptr<ASTNode> val;
-    AssignNode(std::string i, std::unique_ptr<ASTNode> v) : id(i), val(std::move(v)) {}
-};
-
-struct PrtNode : public ASTNode {
-    std::unique_ptr<ASTNode> expr;
-    PrtNode(std::unique_ptr<ASTNode> e) : expr(std::move(e)) {}
-};
-
-struct ProgNode : public ASTNode {
-    std::vector<std::unique_ptr<ASTNode>> stmts;
-    void addStmt(std::unique_ptr<ASTNode> s) { stmts.push_back(std::move(s)); }
-};
-
-
-// 4. PARSER
 
 class Parser {
-private:
-    std::vector<Token> tokens;
-    size_t pos;
+    vector<Token> tokens;
+    size_t pos = 0;
+    bool hadError = false;
 
-    Token current() { return (pos < tokens.size()) ? tokens[pos] : tokens.back(); }
-    void advance() { if (pos < tokens.size()) pos++; }
-    bool match(TokenType type) {
-        if (current().type == type) { advance(); return true; }
-        return false;
+    const Token& current() const { return tokens[pos < tokens.size() ? pos : tokens.size()-1]; }
+    bool check(TokenType t) const { return current().type == t; }
+    Token advance() { Token t=current(); if (!check(TokenType::End)) ++pos; return t; }
+    bool match(TokenType t) { if (check(t)) { advance(); return true; } return false; }
+    Token expect(TokenType t, const string& msg) {
+        if (check(t)) return advance();
+        throw ParseError(current().line, msg);
     }
-
-    std::unique_ptr<ASTNode> factor() {
-        if (match(TokenType::INTEGER_LITERAL)) {
-            return std::make_unique<IntNode>(tokens[pos-1].value);
-        } else if (match(TokenType::IDENTIFIER)) {
-            return std::make_unique<IdNode>(tokens[pos-1].value);
-        } else if (match(TokenType::LEFT_PAREN)) {
-            auto node = expr();
-            if (!match(TokenType::RIGHT_PAREN)) {
-                throw std::runtime_error("Parse Error: Expected ')' at line " + std::to_string(current().line));
+    void synchronize() {
+        while (!check(TokenType::End)) {
+            if (match(TokenType::Semicolon)) return;
+            if (check(TokenType::RBrace)) return;
+            if (check(TokenType::Keyword)) return;
+            advance();
+        }
+    }
+    unique_ptr<Expr> primary() {
+        if (match(TokenType::Number)) return make_unique<Expr>(Expr::Literal, tokens[pos-1].text);
+        if (match(TokenType::Decimal)) return make_unique<Expr>(Expr::Literal, tokens[pos-1].text);
+        if (match(TokenType::Identifier)) return make_unique<Expr>(Expr::Variable, tokens[pos-1].text);
+        if (match(TokenType::LParen)) {
+            auto e = expression();
+            expect(TokenType::RParen, "Expected ')'");
+            return e;
+        }
+        throw ParseError(current().line, "Expected a number, variable, or '('");
+    }
+    unique_ptr<Expr> unary() {
+        if (match(TokenType::Minus)) {
+            auto e=make_unique<Expr>(Expr::Unary, "-");
+            e->right=unary(); return e;
+        }
+        return primary();
+    }
+    unique_ptr<Expr> factor() {
+        auto e=unary();
+        while (check(TokenType::Star) || check(TokenType::Slash)) {
+            string op=advance().text;
+            auto n=make_unique<Expr>(Expr::Binary,op);
+            n->left=std::move(e); n->right=unary(); e=std::move(n);
+        }
+        return e;
+    }
+    unique_ptr<Expr> expression() {
+        auto e=factor();
+        while (check(TokenType::Plus) || check(TokenType::Minus)) {
+            string op=advance().text;
+            auto n=make_unique<Expr>(Expr::Binary,op);
+            n->left=std::move(e); n->right=factor(); e=std::move(n);
+        }
+        return e;
+    }
+    unique_ptr<Expr> condition() {
+        auto left=expression();
+        if (check(TokenType::Less) || check(TokenType::Greater) ||
+            check(TokenType::LessEqual) || check(TokenType::GreaterEqual) ||
+            check(TokenType::Equal) || check(TokenType::NotEqual)) {
+            string op=advance().text;
+            auto n=make_unique<Expr>(Expr::Binary,op);
+            n->left=std::move(left); n->right=expression(); return n;
+        }
+        throw ParseError(current().line, "Expected a comparison operator");
+    }
+    vector<unique_ptr<Stmt>> block() {
+        expect(TokenType::LBrace, "Expected '{'");
+        vector<unique_ptr<Stmt>> list;
+        while (!check(TokenType::RBrace) && !check(TokenType::End)) {
+            size_t before=pos;
+            try { list.push_back(statement()); }
+            catch (const ParseError& e) {
+                hadError=true;
+                cerr << "Syntax Error at line " << e.line << ": " << e.what() << '\n';
+                synchronize();
             }
-            return node;
+            if (pos==before && !check(TokenType::End)) advance();
         }
-        throw std::runtime_error("Parse Error: Unexpected token '" + current().value + "' at line " + std::to_string(current().line));
+        expect(TokenType::RBrace, "Expected '}'");
+        return list;
     }
-
-    std::unique_ptr<ASTNode> term() {
-        auto left = factor();
-        while (current().type == TokenType::MULTIPLY || current().type == TokenType::DIVIDE) {
-            std::string op = (current().type == TokenType::MULTIPLY) ? "MULTIPLY" : "DIVIDE";
+    unique_ptr<Stmt> statement() {
+        if (check(TokenType::Keyword) && current().text=="ধরি") {
             advance();
-            auto right = factor();
-            left = std::make_unique<BinOpNode>(op, std::move(left), std::move(right));
+            auto s=make_unique<Stmt>(Stmt::Declaration);
+            if (match(TokenType::IntType)) s->declaredType=ValueType::Integer;
+            else if (match(TokenType::FloatType)) s->declaredType=ValueType::Decimal;
+            else throw ParseError(current().line,"Expected data type 'সংখ্যা' or 'দশমিক'");
+            s->name=expect(TokenType::Identifier,"Expected variable name").text;
+            expect(TokenType::Assign,"Expected '='");
+            s->expr=expression();
+            expect(TokenType::Semicolon,"Expected ';'");
+            return s;
         }
-        return left;
-    }
-
-    std::unique_ptr<ASTNode> expr() {
-        auto left = term();
-        while (current().type == TokenType::PLUS || current().type == TokenType::MINUS) {
-            std::string op = (current().type == TokenType::PLUS) ? "PLUS" : "MINUS";
+        if (check(TokenType::Keyword) && current().text=="দেখাও") {
             advance();
-            auto right = term();
-            left = std::make_unique<BinOpNode>(op, std::move(left), std::move(right));
+            auto s=make_unique<Stmt>(Stmt::Print);
+            expect(TokenType::LParen,"Expected '(' after দেখাও");
+            s->expr=expression();
+            expect(TokenType::RParen,"Expected ')'");
+            expect(TokenType::Semicolon,"Expected ';'");
+            return s;
         }
-        return left;
-    }
-
-    std::unique_ptr<ASTNode> stmt() {
-        if (current().type == TokenType::INTEGER) {
+        if (check(TokenType::Keyword) && current().text=="যদি") {
             advance();
-            std::string id = current().value;
-            advance();
-            std::unique_ptr<ASTNode> val = nullptr;
-            if (match(TokenType::ASSIGNMENT)) {
-                val = expr();
+            auto s=make_unique<Stmt>(Stmt::If);
+            expect(TokenType::LParen,"Expected '(' after যদি");
+            s->condition=condition();
+            expect(TokenType::RParen,"Expected ')'");
+            s->body=block();
+            if (check(TokenType::Keyword) && current().text=="নাহলে") {
+                advance(); s->elseBody=block();
             }
-            return std::make_unique<DecNode>("integer", id, std::move(val));
-        } 
-        else if (current().type == TokenType::IDENTIFIER) {
-            std::string id = current().value;
-            advance();
-            if (match(TokenType::ASSIGNMENT)) {
-                auto val = expr();
-                return std::make_unique<AssignNode>(id, std::move(val));
-            }
-            throw std::runtime_error("Parse Error: Expected ':' after identifier at line " + std::to_string(current().line));
-        } 
-        else if (current().type == TokenType::PTR) {
-            advance();
-            return std::make_unique<PrtNode>(expr());
+            return s;
         }
-        throw std::runtime_error("Parse Error: Unexpected statement at line " + std::to_string(current().line));
+        if (check(TokenType::Keyword) && current().text=="যতক্ষণ") {
+            advance();
+            auto s=make_unique<Stmt>(Stmt::While);
+            expect(TokenType::LParen,"Expected '(' after যতক্ষণ");
+            s->condition=condition();
+            expect(TokenType::RParen,"Expected ')'");
+            s->body=block();
+            return s;
+        }
+        if (check(TokenType::Identifier)) {
+            auto s=make_unique<Stmt>(Stmt::Assignment);
+            s->name=advance().text;
+            expect(TokenType::Assign,"Expected '=' after variable name");
+            s->expr=expression();
+            expect(TokenType::Semicolon,"Expected ';'");
+            return s;
+        }
+        if (check(TokenType::Invalid))
+            throw ParseError(current().line,"Invalid character: " + current().text);
+        throw ParseError(current().line,"Unexpected token: " + current().text);
     }
 
 public:
-    Parser(std::vector<Token> t) : tokens(t), pos(0) {}
-
-    std::unique_ptr<ProgNode> parse() {
-        auto program = std::make_unique<ProgNode>();
-        while (current().type != TokenType::EOF_TOKEN) {
-            program->addStmt(stmt());
+    explicit Parser(vector<Token> t) : tokens(std::move(t)) {}
+    vector<unique_ptr<Stmt>> parse() {
+        vector<unique_ptr<Stmt>> result;
+        while (!check(TokenType::End)) {
+            size_t before=pos;
+            try { result.push_back(statement()); }
+            catch (const ParseError& e) {
+                hadError=true;
+                cerr << "Syntax Error at line " << e.line << ": " << e.what() << '\n';
+                synchronize();
+            }
+            if (pos==before && !check(TokenType::End)) advance();
         }
-        return program;
-    }
-};
-
-// 5. SYMBOL TABLE (Advanced - Matches Python)
-
-struct Symbol {
-    std::string name;
-    std::string type;
-    std::string value;
-    bool is_init;
-
-    Symbol(std::string n, std::string t, std::string v = "", bool init = false) 
-        : name(n), type(t), value(v), is_init(init) {
-        if (!value.empty()) is_init = true;
-    }
-
-    std::string toString() const {
-        std::string status = is_init ? "initialized" : "uninitialized";
-        return name + ", " + type + ", " + status;
-    }
-};
-
-class SymbolTable {
-private:
-    std::unordered_map<std::string, Symbol> vars;
-
-public:
-    std::pair<bool, std::string> define(const std::string& name, const std::string& type, const std::string& value = "") {
-        if (vars.count(name)) {
-            return {false, "'" + name + "' is already declared!"};
-        }
-        vars[name] = Symbol(name, type, value);
-        return {true, ""};
-    }
-
-    std::pair<bool, std::string> update(const std::string& name, const std::string& value) {
-        if (!vars.count(name)) {
-            return {false, name + " is not declared!"};
-        }
-        vars[name].value = value;
-        vars[name].is_init = true;
-        return {true, ""};
-    }
-
-    Symbol* lookup(const std::string& name) {
-        if (vars.count(name)) {
-            return &vars[name];
-        }
-        return nullptr;
-    }
-
-    bool is_defined(const std::string& name) {
-        return vars.count(name) > 0;
-    }
-
-    bool is_initialized(const std::string& name) {
-        if (vars.count(name)) {
-            return vars[name].is_init;
-        }
-        return false;
-    }
-
-    void printSymbols() const {
-        std::cout << std::string(62, '-') << "\n";
-        std::cout << std::left << std::setw(12) << "var-name" << "\t\t"
-                  << std::setw(12) << "var-type" << "\t\t"
-                  << "is_initialized\n";
-        std::cout << std::string(62, '-') << "\n";
-        for (const auto& pair : vars) {
-            std::string status = pair.second.is_init ? "initialized" : "uninitialized";
-            std::cout << std::left << std::setw(12) << pair.second.name << "\t\t"
-                      << std::setw(12) << pair.second.type << "\t\t"
-                      << status << "\n";
-        }
-    }
-
-    std::string toString() const {
-        std::string result = "Symbol Table:\n" + std::string(40, '-') + "\n";
-        result += std::left << std::setw(12) << "Name" << " " 
-                  << std::setw(10) << "Type" << " " 
-                  << std::setw(14) << "Status" + "\n";
-        result += std::string(40, '-') + "\n";
-        for (const auto& pair : vars) {
-            std::string status = pair.second.is_init ? "initialized" : "uninitialized";
-            result += std::left << std::setw(12) << pair.second.name << " " 
-                      << std::setw(10) << pair.second.type << " " 
-                      << status + "\n";
-        }
+        if (hadError) throw runtime_error("Parsing failed due to syntax errors.");
         return result;
     }
 };
 
-
-// 6. SEMANTIC ANALYZER (Advanced - Matches Python)
-
 class SemanticAnalyzer {
-private:
-    SymbolTable symtab;
-    std::vector<std::string> errors;
+    map<string,ValueType> symbols;
+    bool hadError=false;
 
-    std::string analyzeExpr(const ASTNode* node) {
-        if (auto n = dynamic_cast<const IdNode*>(node)) {
-            Symbol* x = symtab.lookup(n->value);
-            if (!x) {
-                errors.push_back("Variable '" + n->value + "' used but not declared");
-                return "";
-            }
-            if (!x->is_init) {
-                errors.push_back("Variable '" + n->value + "' used but not initialized");
-                return x->type;
-            }
-            return x->type;
-        } 
-        else if (auto n = dynamic_cast<const IntNode*>(node)) {
-            return "integer";
-        } 
-        else if (auto n = dynamic_cast<const BinOpNode*>(node)) {
-            std::string left_type = analyzeExpr(n->left.get());
-            std::string right_type = analyzeExpr(n->right.get());
-            if (left_type != "integer" || right_type != "integer") {
-                errors.push_back("Type mismatch: '" + n->op + "' between '" + left_type + "' and '" + right_type + "'");
-                return "";
-            }
-            if (left_type == "integer" && right_type == "integer") {
-                return "integer";
-            }
-            return "";
-        }
-        return "";
+    void report(const string& msg,int line) {
+        cerr << "Semantic Error at line " << line << ": " << msg << '\n';
+        hadError=true;
     }
-
-    void analyzeDec(const DecNode* node) {
-        if (node->type != "integer") {
-            errors.push_back("Variable '" + node->id + "' with Unknown Type '" + node->type + "'");
-            return;
+    ValueType exprType(const Expr* e,int line) {
+        if (!e) return ValueType::Unknown;
+        if (e->kind==Expr::Literal) {
+            return e->value.find('.')==string::npos ? ValueType::Integer : ValueType::Decimal;
         }
-        auto [ok, err] = symtab.define(node->id, node->type);
-        if (!ok) {
-            errors.push_back(err);
-            return;
+        if (e->kind==Expr::Variable) {
+            auto it=symbols.find(e->value);
+            if (it==symbols.end()) { report("Undeclared variable '" + e->value + "'",line); return ValueType::Unknown; }
+            return it->second;
         }
-        if (node->val) {
-            std::string expr_type = analyzeExpr(node->val.get());
-            if (!expr_type.empty() && expr_type != "integer") {
-                errors.push_back("Type mismatch: '" + node->id + "' declared as 'integer' but assigned '" + expr_type + "'");
+        if (e->kind==Expr::Unary) return exprType(e->right.get(),line);
+        ValueType a=exprType(e->left.get(),line);
+        ValueType b=exprType(e->right.get(),line);
+        if (e->value=="<" || e->value==">" || e->value=="<=" ||
+            e->value==">=" || e->value=="==" || e->value=="!=") {
+            if (a==ValueType::Unknown || b==ValueType::Unknown) return ValueType::Unknown;
+            return ValueType::Integer; // conditions are represented as numeric truth values
+        }
+        if (e->value=="/") return ValueType::Decimal;
+        if (a==ValueType::Decimal || b==ValueType::Decimal) return ValueType::Decimal;
+        if (a==ValueType::Unknown || b==ValueType::Unknown) return ValueType::Unknown;
+        return ValueType::Integer;
+    }
+    void checkExpr(const Expr* e,int line) { (void)exprType(e,line); }
+    void checkList(const vector<unique_ptr<Stmt>>& list) {
+        for (const auto& s:list) checkStmt(s.get());
+    }
+    void checkStmt(const Stmt* s) {
+        if (s->kind==Stmt::Declaration) {
+            if (symbols.count(s->name)) {
+                report("Variable '" + s->name + "' is already declared",0);
                 return;
             }
-            symtab.update(node->id, "value");
-        }
-    }
-
-    void analyzeAssign(const AssignNode* node) {
-        if (symtab.is_defined(node->id)) {
-            std::string expr_type = analyzeExpr(node->val.get());
-            if (!expr_type.empty() && expr_type != "integer") {
-                errors.push_back("Type mismatch: '" + node->id + "' declared as 'integer' but assigned '" + expr_type + "'");
+            ValueType actual=exprType(s->expr.get(),0);
+            if (s->declaredType==ValueType::Integer && actual==ValueType::Decimal)
+                report("Cannot assign decimal expression to সংখ্যা variable '" + s->name + "'",0);
+            symbols[s->name]=s->declaredType;
+        } else if (s->kind==Stmt::Assignment) {
+            auto it=symbols.find(s->name);
+            if (it==symbols.end()) {
+                report("Undeclared variable '" + s->name + "'",0);
+            } else {
+                ValueType actual=exprType(s->expr.get(),0);
+                if (it->second==ValueType::Integer && actual==ValueType::Decimal)
+                    report("Cannot assign decimal expression to সংখ্যা variable '" + s->name + "'",0);
             }
-            symtab.update(node->id, "value");
-        }
-    }
-
-    void analyzePrt(const PrtNode* node) {
-        analyzeExpr(node->expr.get());
-    }
-
-    void analyzeStmt(const ASTNode* node) {
-        if (auto n = dynamic_cast<const DecNode*>(node)) {
-            analyzeDec(n);
-        } 
-        else if (auto n = dynamic_cast<const AssignNode*>(node)) {
-            analyzeAssign(n);
-        } 
-        else if (auto n = dynamic_cast<const PrtNode*>(node)) {
-            analyzePrt(n);
-        } 
-        else {
-            analyzeExpr(node);
+        } else if (s->kind==Stmt::Print) {
+            checkExpr(s->expr.get(),0);
+        } else {
+            checkExpr(s->condition.get(),0);
+            checkList(s->body);
+            checkList(s->elseBody);
         }
     }
 
 public:
-    std::pair<SymbolTable, std::vector<std::string>> analyze(const ProgNode* program) {
-        for (const auto& stmt : program->stmts) {
-            analyzeStmt(stmt.get());
-        }
-        return {symtab, errors};
+    bool analyze(const vector<unique_ptr<Stmt>>& program) {
+        checkList(program);
+        return !hadError;
     }
 };
 
-
-// 7. AST PRINTER
-
-void printAST(const ASTNode* node, int depth = 0) {
-    std::string prefix(depth * 3, '-');
-    
-    if (auto n = dynamic_cast<const ProgNode*>(node)) {
-        std::cout << "Program\n";
-        for (const auto& s : n->stmts) {
-            std::cout << depth;
-            printAST(s.get(), depth + 1);
-        }
-    } 
-    else if (auto n = dynamic_cast<const DecNode*>(node)) {
-        std::cout << prefix << "Declare(" << n->type << ")\n";
-        std::cout << prefix << "---" << n->id << "\n";
-        if (n->val) {
-            printAST(n->val.get(), depth + 1);
-        }
-    } 
-    else if (auto n = dynamic_cast<const AssignNode*>(node)) {
-        std::cout << prefix << "Assign\n";
-        std::cout << prefix << "---" << n->id << "\n";
-        printAST(n->val.get(), depth + 1);
-    } 
-    else if (auto n = dynamic_cast<const PrtNode*>(node)) {
-        std::cout << prefix << "Print\n";
-        printAST(n->expr.get(), depth + 1);
-    } 
-    else if (auto n = dynamic_cast<const BinOpNode*>(node)) {
-        std::cout << prefix << n->op << "\n";
-        printAST(n->left.get(), depth + 1);
-        printAST(n->right.get(), depth + 1);
-    } 
-    else if (auto n = dynamic_cast<const IntNode*>(node)) {
-        std::cout << prefix << n->value << "\n";
-    } 
-    else if (auto n = dynamic_cast<const IdNode*>(node)) {
-        std::cout << prefix << n->value << "\n";
+class CodeGenerator {
+    string indent(int n) const { return string(n*4,' '); }
+    string expr(const Expr* e) const {
+        if (e->kind==Expr::Literal || e->kind==Expr::Variable) return e->value;
+        if (e->kind==Expr::Unary) return "(-" + expr(e->right.get()) + ")";
+        return "(" + expr(e->left.get()) + " " + e->value + " " + expr(e->right.get()) + ")";
     }
-}
+    void emitList(const vector<unique_ptr<Stmt>>& list,ostringstream& out,int level) const {
+        for (const auto& s:list) emitStmt(s.get(),out,level);
+    }
+    void emitStmt(const Stmt* s,ostringstream& out,int level) const {
+        string pad=indent(level);
+        if (s->kind==Stmt::Declaration) {
+            out << pad << s->name << " = " << expr(s->expr.get()) << '\n';
+        } else if (s->kind==Stmt::Assignment) {
+            out << pad << s->name << " = " << expr(s->expr.get()) << '\n';
+        } else if (s->kind==Stmt::Print) {
+            out << pad << "print(" << expr(s->expr.get()) << ")\n";
+        } else if (s->kind==Stmt::If) {
+            out << pad << "if " << expr(s->condition.get()) << ":\n";
+            if (s->body.empty()) out << indent(level+1) << "pass\n";
+            else emitList(s->body,out,level+1);
+            if (!s->elseBody.empty()) {
+                out << pad << "else:\n";
+                emitList(s->elseBody,out,level+1);
+            }
+        } else if (s->kind==Stmt::While) {
+            out << pad << "while " << expr(s->condition.get()) << ":\n";
+            if (s->body.empty()) out << indent(level+1) << "pass\n";
+            else emitList(s->body,out,level+1);
+        }
+    }
+public:
+    string generate(const vector<unique_ptr<Stmt>>& program) const {
+        ostringstream out;
+        out << "# Generated by BanglaCode Compiler\n";
+        emitList(program,out,0);
+        return out.str();
+    }
+};
 
-// 8. MAIN FUNCTION (DEMO with your exact test case)
+int main(int argc,char* argv[]) {
+    string inputPath = argc >= 2 ? argv[1] : "test.bangla";
+    string outputPath = argc >= 3 ? argv[2] : "generated.py";
 
-int main() {
-    std::string sourceCode = R"(
-integer a 
-integer b : a + 20
-integer a : 10
-integer c : a + 2
-b : b - 5
-b : a+b*c+(d-10)
-ptr b
-)";
-
-    std::cout << "SOURCE CODE:\n" << sourceCode << "\n";
+    ifstream input(inputPath, ios::binary);
+    if (!input) {
+        cerr << "Error: Cannot open source file: " << inputPath << '\n';
+        cerr << "Usage: BanglaCode.exe input.bangla [output.py]\n";
+        return 1;
+    }
+    stringstream buffer;
+    buffer << input.rdbuf();
 
     try {
-        // 1. Lexical Analysis
-        std::cout << "\n--- TOKENS ---\n";
-        Lexer lexer(sourceCode);
-        std::vector<Token> tokens = lexer.tokenize();
-        for (const auto& token : tokens) {
-            std::cout << token.toString() << "\n";
-        }
+        Lexer lexer(buffer.str());
+        vector<Token> tokens=lexer.tokenize();
 
-        // 2. Parsing
-        std::cout << "\n--- AST ---\n";
         Parser parser(tokens);
-        std::unique_ptr<ProgNode> ast = parser.parse();
-        printAST(ast.get());
+        auto program=parser.parse();
 
-        std::cout << "\n--- PARSED PROGRAM ---\n";
-        std::cout << "program{\n";
-        for (const auto& stmt : ast->stmts) {
-            if (auto n = dynamic_cast<const DecNode*>(stmt.get())) {
-                std::cout << "declare(" << n->type << " " << n->id;
-                if (n->val) std::cout << " : <expr>";
-                std::cout << ")\n";
-            } 
-            else if (auto n = dynamic_cast<const AssignNode*>(stmt.get())) {
-                std::cout << "assign(" << n->id << " : <expr>)\n";
-            } 
-            else if (auto n = dynamic_cast<const PrtNode*>(stmt.get())) {
-                std::cout << "print(<expr>)\n";
-            }
-        }
-        std::cout << "}\n";
-
-        // 3. Semantic Analysis
-        std::cout << "\n--- SEMANTIC ANALYSIS ---\n";
-        SemanticAnalyzer analyzer;
-        auto [symtab, errors] = analyzer.analyze(ast.get());
-        std::cout << symtab.toString() << "\n";
-
-        if (!errors.empty()) {
-            std::cout << "\nERRORS:\n";
-            for (const auto& err : errors) {
-                std::cout << " " << err << "\n";
-            }
-        } 
-        else {
-            std::cout << "\nNo semantic errors found!\n";
+        SemanticAnalyzer semantic;
+        if (!semantic.analyze(program)) {
+            cerr << "Compilation failed: semantic errors found.\n";
+            return 1;
         }
 
-        std::cout << "\n✅ Compiler Frontend Completed Successfully!\n";
+        CodeGenerator generator;
+        string generated=generator.generate(program);
 
-    } catch (const std::exception& e) {
-        std::cerr << "\n❌ ERROR: " << e.what() << "\n";
+        ofstream output(outputPath,ios::binary);
+        if (!output) {
+            cerr << "Error: Cannot write output file: " << outputPath << '\n';
+            return 1;
+        }
+        output << generated;
+        output.close();
+
+        cout << "Compilation successful!\n";
+        cout << "Generated Python file: " << outputPath << '\n';
+    } catch (const exception& e) {
+        cerr << e.what() << '\n';
+        return 1;
     }
-
     return 0;
 }
