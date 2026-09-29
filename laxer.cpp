@@ -5,197 +5,126 @@
 
 using namespace std;
 
-
-// Token Types
-
-string INTEGER = "INTEGER";
-string IDENTIFIER = "IDENTIFIER";
-string INTEGER_LITERAL = "INTEGER_LITERAL";
-string ASSIGNMENT = "ASSIGNMENT";
-string PRINT = "Ptr";
-string PLUS = "PLUS";
-string MINUS = "MINUS";
-string MULTIPLY = "MULTIPLY";
-string DIVIDE = "DIVIDE";
-string LEFT_PAREN = "LEFT_PAREN";
-string RIGHT_PAREN = "RIGHT_PAREN";
-string EOF_TOKEN = "EOF";
-
-
-// Token Class (Python er Token class er moto)
-
-class Token {
-public:
-    string type_;
-    string value;
-    int line;
-
-    Token(string t, string v, int l) {
-        type_ = t;
-        value = v;
-        line = l;
-    }
-
-    void print() {
-        if (value == "") {
-            cout << "< " << type_ << " >" << endl;
-        } else {
-            cout << "< " << type_ << " , " << value << " >" << endl;
-        }
-    }
+enum class TokenType {
+    Keyword, IntType, FloatType, Identifier, Number, Decimal,
+    Assign, Plus, Minus, Star, Slash,
+    Semicolon, LParen, RParen, LBrace, RBrace,
+    Less, Greater, LessEqual, GreaterEqual, Equal, NotEqual,
+    End, Invalid
 };
 
-
-// Lexer Class (Python er Lexer class er moto)
+struct Token {
+    TokenType type;
+    string text;
+    int line;
+};
 
 class Lexer {
+    string source;
+    size_t pos = 0;
+    int line = 1;
+
+    bool atEnd() const { return pos >= source.size(); }
+    
+    char peek(size_t offset = 0) const {
+        return pos + offset < source.size() ? source[pos + offset] : '\0';
+    }
+    
+    Token make(TokenType t, const string& s, int ln) {
+        return Token{t, s, ln};
+    }
+
 public:
-    string code;
-    int pos;
-    int line;
-    vector<Token> tokens;
+    explicit Lexer(string s) : source(std::move(s)) {}
 
-    Lexer(string src) {
-        code = src;
-        pos = 0;
-        line = 1;
-    }
-
-    // Current character dekhe
-    char getChar() {
-        if (pos < code.length()) {
-            return code[pos];
-        }
-        return '\0';
-    }
-
-    // Porer character e jay
-    void advance() {
-        if (getChar() == '\n') {
-            line++;
-        }
-        pos++;
-    }
-
-    // Main function: source code theke token banay
     vector<Token> tokenize() {
-        string error = "";
+        vector<Token> out;
+        while (!atEnd()) {
+            char c = peek();
+            if (c == ' ' || c == '\t' || c == '\r') { ++pos; continue; }
+            if (c == '\n') { ++line; ++pos; continue; }
 
-        while (true) {
-            char c = getChar();
+            int tokenLine = line;
 
-            // Source code shesh hole break
-            if (c == '\0') {
-                break;
-            }
-
-            // Whitespace skip koro
-            else if (c == ' ' || c == '\t' || c == '\n') {
-                advance();
-            }
-
-            // Single line comment skip koro (#)
-            else if (c == '#') {
-                while (getChar() != '\0' && getChar() != '\n') {
-                    advance();
+            // Single-line comments: // ... or # ...
+            if (c == '#' || (c == '/' && peek(1) == '/')) {
+                if (c == '#') {
+                    while (!atEnd() && peek() != '\n') ++pos;
+                } else {
+                    pos += 2;
+                    while (!atEnd() && peek() != '\n') ++pos;
                 }
+                continue;
             }
 
-            // Number hole (e.g., 10, 42)
-            else if (isdigit(c)) {
-                string num = "";
-                while (getChar() != '\0' && isdigit(getChar())) {
-                    num += getChar();
-                    advance();
+            if (isdigit(static_cast<unsigned char>(c))) {
+                string number;
+                while (isdigit(static_cast<unsigned char>(peek()))) {
+                    number += peek(); ++pos;
                 }
-                tokens.push_back(Token(INTEGER_LITERAL, num, line));
+                if (peek() == '.' && isdigit(static_cast<unsigned char>(peek(1)))) {
+                    number += peek(); ++pos;
+                    while (isdigit(static_cast<unsigned char>(peek()))) {
+                        number += peek(); ++pos;
+                    }
+                    out.push_back(make(TokenType::Decimal, number, tokenLine));
+                } else {
+                    out.push_back(make(TokenType::Number, number, tokenLine));
+                }
+                continue;
             }
 
-            // Letter hole (keyword ba identifier)
-            else if (isalpha(c) || c == '_') {
-                string word = "";
-                while (getChar() != '\0' && (isalnum(getChar()) || getChar() == '_')) {
-                    word += getChar();
-                    advance();
+            // ASCII identifiers and UTF-8 Bangla words. Non-ASCII bytes are
+            // consumed as part of a word; punctuation remains ASCII.
+            if (isalpha(static_cast<unsigned char>(c)) || c == '_' ||
+                static_cast<unsigned char>(c) >= 128) {
+                string word;
+                while (!atEnd()) {
+                    unsigned char ch = static_cast<unsigned char>(peek());
+                    if (isalnum(ch) || ch == '_' || ch >= 128) {
+                        word += peek(); ++pos;
+                    } else break;
                 }
-
-                // Keyword check
-                if (word == "integer") {
-                    tokens.push_back(Token(INTEGER, "", line));
-                }
-                else if (word == "ptr") {
-                    tokens.push_back(Token(PRINT, "", line));
-                }
-                else {
-                    tokens.push_back(Token(IDENTIFIER, word, line));
-                }
-            }
-
-            // Operators and delimiters
-            else if (c == ':') {
-                tokens.push_back(Token(ASSIGNMENT, ":", line));
-                advance();
-            }
-            else if (c == '+') {
-                tokens.push_back(Token(PLUS, "+", line));
-                advance();
-            }
-            else if (c == '-') {
-                tokens.push_back(Token(MINUS, "-", line));
-                advance();
-            }
-            else if (c == '*') {
-                tokens.push_back(Token(MULTIPLY, "*", line));
-                advance();
-            }
-            else if (c == '/') {
-                tokens.push_back(Token(DIVIDE, "/", line));
-                advance();
-            }
-            else if (c == '(') {
-                tokens.push_back(Token(LEFT_PAREN, "(", line));
-                advance();
-            }
-            else if (c == ')') {
-                tokens.push_back(Token(RIGHT_PAREN, ")", line));
-                advance();
+                if (word == "ধরি") out.push_back(make(TokenType::Keyword, word, tokenLine));
+                else if (word == "যদি" || word == "নাহলে" || word == "যতক্ষণ" ||
+                         word == "দেখাও")
+                    out.push_back(make(TokenType::Keyword, word, tokenLine));
+                else if (word == "সংখ্যা") out.push_back(make(TokenType::IntType, word, tokenLine));
+                else if (word == "দশমিক") out.push_back(make(TokenType::FloatType, word, tokenLine));
+                else out.push_back(make(TokenType::Identifier, word, tokenLine));
+                continue;
             }
 
-            // Illegal character (Error)
-            else {
-                error = "LexerError: Illegal char '" + string(1, c) + "' at line " + to_string(line);
-                cout << error << endl;
-                break;
+            switch (c) {
+                case '=':
+                    if (peek(1) == '=') { out.push_back(make(TokenType::Equal, "==", tokenLine)); pos += 2; }
+                    else { out.push_back(make(TokenType::Assign, "=", tokenLine)); ++pos; }
+                    break;
+                case '!':
+                    if (peek(1) == '=') { out.push_back(make(TokenType::NotEqual, "!=", tokenLine)); pos += 2; }
+                    else { out.push_back(make(TokenType::Invalid, "!", tokenLine)); ++pos; }
+                    break;
+                case '<':
+                    if (peek(1) == '=') { out.push_back(make(TokenType::LessEqual, "<=", tokenLine)); pos += 2; }
+                    else { out.push_back(make(TokenType::Less, "<", tokenLine)); ++pos; }
+                    break;
+                case '>':
+                    if (peek(1) == '=') { out.push_back(make(TokenType::GreaterEqual, ">=", tokenLine)); pos += 2; }
+                    else { out.push_back(make(TokenType::Greater, ">", tokenLine)); ++pos; }
+                    break;
+                case '+': out.push_back(make(TokenType::Plus, "+", tokenLine)); ++pos; break;
+                case '-': out.push_back(make(TokenType::Minus, "-", tokenLine)); ++pos; break;
+                case '*': out.push_back(make(TokenType::Star, "*", tokenLine)); ++pos; break;
+                case '/': out.push_back(make(TokenType::Slash, "/", tokenLine)); ++pos; break;
+                case ';': out.push_back(make(TokenType::Semicolon, ";", tokenLine)); ++pos; break;
+                case '(': out.push_back(make(TokenType::LParen, "(", tokenLine)); ++pos; break;
+                case ')': out.push_back(make(TokenType::RParen, ")", tokenLine)); ++pos; break;
+                case '{': out.push_back(make(TokenType::LBrace, "{", tokenLine)); ++pos; break;
+                case '}': out.push_back(make(TokenType::RBrace, "}", tokenLine)); ++pos; break;
+                default: out.push_back(make(TokenType::Invalid, string(1,c), tokenLine)); ++pos; break;
             }
         }
-
-        // Sheshe EOF token add koro
-        tokens.push_back(Token(EOF_TOKEN, "", line));
-
-        return tokens;
+        out.push_back(make(TokenType::End, "", line));
+        return out;
     }
 };
-
-// Main Function (Test korar jonno)
-
-int main() {
-
-    string code = "integer a : 10\n"
-                  "integer b : a - 5\n"
-                  "b : (b * 10)\n"
-                  "ptr b\n";
-
-    cout << "=== SOURCE CODE ===" << endl;
-    cout << code << endl;
-
-    cout << "=== TOKENS ===" << endl;
-
-    Lexer lexer(code);
-    vector<Token> tokens = lexer.tokenize();
-
-    for (int i = 0; i < tokens.size(); i++) {
-        tokens[i].print();
-    }
-
-    return 0;
-}
