@@ -2,357 +2,329 @@
 #include <string>
 #include <vector>
 #include <cctype>
+#include <memory>
+#include <stdexcept>
 
 using namespace std;
 
-
-// Token Types (Global Variables)
-
-string INTEGER = "INTEGER";
-string IDENTIFIER = "IDENTIFIER";
-string INTEGER_LITERAL = "INTEGER_LITERAL";
-string ASSIGNMENT = "ASSIGNMENT";
-string PRINT = "Ptr";
-string PLUS = "PLUS";
-string MINUS = "MINUS";
-string MULTIPLY = "MULTIPLY";
-string DIVIDE = "DIVIDE";
-string LEFT_PAREN = "LEFT_PAREN";
-string RIGHT_PAREN = "RIGHT_PAREN";
-string EOF_TOKEN = "EOF";
-
-// Token Class
-
-class Token {
-public:
-    string type_;
-    string value;
-    int line;
-
-    Token(string t, string v, int l) {
-        type_ = t;
-        value = v;
-        line = l;
-    }
-
-    void print() {
-        if (value == "") {
-            cout << "< " << type_ << " >" << endl;
-        } else {
-            cout << "< " << type_ << " , " << value << " >" << endl;
-        }
-    }
+// ==========================================
+// 1. Token & Lexer Definitions
+// ==========================================
+enum class TokenType {
+    Keyword, IntType, FloatType, Identifier, Number, Decimal,
+    Assign, Plus, Minus, Star, Slash,
+    Semicolon, LParen, RParen, LBrace, RBrace,
+    Less, Greater, LessEqual, GreaterEqual, Equal, NotEqual,
+    End, Invalid
 };
 
-
-// Lexer Class
+struct Token {
+    TokenType type;
+    string text;
+    int line;
+};
 
 class Lexer {
+    string source;
+    size_t pos = 0;
+    int line = 1;
+
+    bool atEnd() const { return pos >= source.size(); }
+    char peek(size_t offset = 0) const {
+        return pos + offset < source.size() ? source[pos + offset] : '\0';
+    }
+    Token make(TokenType t, const string& s, int ln) {
+        return Token{t, s, ln};
+    }
+
 public:
-    string code;
-    int pos;
-    int line;
-    vector<Token> tokens;
-
-    Lexer(string src) {
-        code = src;
-        pos = 0;
-        line = 1;
-    }
-
-    char getChar() {
-        if (pos < code.length()) {
-            return code[pos];
-        }
-        return '\0';
-    }
-
-    void advance() {
-        if (getChar() == '\n') {
-            line++;
-        }
-        pos++;
-    }
+    explicit Lexer(string s) : source(std::move(s)) {}
 
     vector<Token> tokenize() {
-        while (true) {
-            char c = getChar();
+        vector<Token> out;
+        while (!atEnd()) {
+            char c = peek();
+            if (c == ' ' || c == '\t' || c == '\r') { ++pos; continue; }
+            if (c == '\n') { ++line; ++pos; continue; }
 
-            if (c == '\0') {
-                break;
-            }
-            else if (c == ' ' || c == '\t' || c == '\n') {
-                advance();
-            }
-            else if (c == '#') {
-                while (getChar() != '\0' && getChar() != '\n') {
-                    advance();
-                }
-            }
-            else if (isdigit(c)) {
-                string num = "";
-                while (getChar() != '\0' && isdigit(getChar())) {
-                    num += getChar();
-                    advance();
-                }
-                tokens.push_back(Token(INTEGER_LITERAL, num, line));
-            }
-            else if (isalpha(c) || c == '_') {
-                string word = "";
-                while (getChar() != '\0' && (isalnum(getChar()) || getChar() == '_')) {
-                    word += getChar();
-                    advance();
-                }
+            int tokenLine = line;
 
-                if (word == "integer") {
-                    tokens.push_back(Token(INTEGER, "", line));
+            // Single-line comments: // ... or # ...
+            if (c == '#' || (c == '/' && peek(1) == '/')) {
+                if (c == '#') {
+                    while (!atEnd() && peek() != '\n') ++pos;
+                } else {
+                    pos += 2;
+                    while (!atEnd() && peek() != '\n') ++pos;
                 }
-                else if (word == "ptr") {
-                    tokens.push_back(Token(PRINT, "", line));
+                continue;
+            }
+
+            if (isdigit(static_cast<unsigned char>(c))) {
+                string number;
+                while (isdigit(static_cast<unsigned char>(peek()))) {
+                    number += peek(); ++pos;
                 }
-                else {
-                    tokens.push_back(Token(IDENTIFIER, word, line));
+                if (peek() == '.' && isdigit(static_cast<unsigned char>(peek(1)))) {
+                    number += peek(); ++pos;
+                    while (isdigit(static_cast<unsigned char>(peek()))) {
+                        number += peek(); ++pos;
+                    }
+                    out.push_back(make(TokenType::Decimal, number, tokenLine));
+                } else {
+                    out.push_back(make(TokenType::Number, number, tokenLine));
                 }
+                continue;
             }
-            else if (c == ':') {
-                tokens.push_back(Token(ASSIGNMENT, ":", line));
-                advance();
+
+            // ASCII identifiers and UTF-8 Bangla words.
+            if (isalpha(static_cast<unsigned char>(c)) || c == '_' ||
+                static_cast<unsigned char>(c) >= 128) {
+                string word;
+                while (!atEnd()) {
+                    unsigned char ch = static_cast<unsigned char>(peek());
+                    if (isalnum(ch) || ch == '_' || ch >= 128) {
+                        word += peek(); ++pos;
+                    } else break;
+                }
+                if (word == "ধরি") out.push_back(make(TokenType::Keyword, word, tokenLine));
+                else if (word == "যদি" || word == "নাহলে" || word == "যতক্ষণ" || word == "দেখাও")
+                    out.push_back(make(TokenType::Keyword, word, tokenLine));
+                else if (word == "সংখ্যা") out.push_back(make(TokenType::IntType, word, tokenLine));
+                else if (word == "দশমিক") out.push_back(make(TokenType::FloatType, word, tokenLine));
+                else out.push_back(make(TokenType::Identifier, word, tokenLine));
+                continue;
             }
-            else if (c == '+') {
-                tokens.push_back(Token(PLUS, "+", line));
-                advance();
-            }
-            else if (c == '-') {
-                tokens.push_back(Token(MINUS, "-", line));
-                advance();
-            }
-            else if (c == '*') {
-                tokens.push_back(Token(MULTIPLY, "*", line));
-                advance();
-            }
-            else if (c == '/') {
-                tokens.push_back(Token(DIVIDE, "/", line));
-                advance();
-            }
-            else if (c == '(') {
-                tokens.push_back(Token(LEFT_PAREN, "(", line));
-                advance();
-            }
-            else if (c == ')') {
-                tokens.push_back(Token(RIGHT_PAREN, ")", line));
-                advance();
-            }
-            else {
-                cout << "LexerError: Illegal char '" << c << "' at line " << line << endl;
-                break;
+
+            switch (c) {
+                case '=':
+                    if (peek(1) == '=') { out.push_back(make(TokenType::Equal, "==", tokenLine)); pos += 2; }
+                    else { out.push_back(make(TokenType::Assign, "=", tokenLine)); ++pos; }
+                    break;
+                case '!':
+                    if (peek(1) == '=') { out.push_back(make(TokenType::NotEqual, "!=", tokenLine)); pos += 2; }
+                    else { out.push_back(make(TokenType::Invalid, "!", tokenLine)); ++pos; }
+                    break;
+                case '<':
+                    if (peek(1) == '=') { out.push_back(make(TokenType::LessEqual, "<=", tokenLine)); pos += 2; }
+                    else { out.push_back(make(TokenType::Less, "<", tokenLine)); ++pos; }
+                    break;
+                case '>':
+                    if (peek(1) == '=') { out.push_back(make(TokenType::GreaterEqual, ">=", tokenLine)); pos += 2; }
+                    else { out.push_back(make(TokenType::Greater, ">", tokenLine)); ++pos; }
+                    break;
+                case '+': out.push_back(make(TokenType::Plus, "+", tokenLine)); ++pos; break;
+                case '-': out.push_back(make(TokenType::Minus, "-", tokenLine)); ++pos; break;
+                case '*': out.push_back(make(TokenType::Star, "*", tokenLine)); ++pos; break;
+                case '/': out.push_back(make(TokenType::Slash, "/", tokenLine)); ++pos; break;
+                case ';': out.push_back(make(TokenType::Semicolon, ";", tokenLine)); ++pos; break;
+                case '(': out.push_back(make(TokenType::LParen, "(", tokenLine)); ++pos; break;
+                case ')': out.push_back(make(TokenType::RParen, ")", tokenLine)); ++pos; break;
+                case '{': out.push_back(make(TokenType::LBrace, "{", tokenLine)); ++pos; break;
+                case '}': out.push_back(make(TokenType::RBrace, "}", tokenLine)); ++pos; break;
+                default: out.push_back(make(TokenType::Invalid, string(1,c), tokenLine)); ++pos; break;
             }
         }
-
-        tokens.push_back(Token(EOF_TOKEN, "", line));
-        return tokens;
+        out.push_back(make(TokenType::End, "", line));
+        return out;
     }
 };
 
+// ==========================================
+// 2. AST (Abstract Syntax Tree) Definitions
+// ==========================================
+enum class ValueType { Integer, Decimal, Unknown };
 
-// AST Node Classes (Parser er jonno)
-
-
-// Base class for all nodes
-class ASTNode {
-public:
-    virtual void print(int depth = 0) = 0;
-    virtual ~ASTNode() {}
-};
-
-// Integer literal node (e.g., 10, 42)
-class IntNode : public ASTNode {
-public:
+struct Expr {
+    enum Kind { Literal, Variable, Unary, Binary } kind;
     string value;
-    IntNode(string v) { value = v; }
-
-    void print(int depth = 0) override {
-        for (int i = 0; i < depth * 3; i++) cout << "-";
-        cout << "IntNode: " << value << endl;
-    }
+    unique_ptr<Expr> left, right;
+    Expr(Kind k, string v = "") : kind(k), value(std::move(v)) {}
 };
 
-// Identifier node (e.g., a, myVar)
-class IdNode : public ASTNode {
+struct Stmt {
+    enum Kind { Declaration, Assignment, Print, If, While } kind;
+    string name;
+    ValueType declaredType = ValueType::Unknown;
+    unique_ptr<Expr> expr, condition;
+    vector<unique_ptr<Stmt>> body, elseBody;
+    Stmt(Kind k) : kind(k) {}
+};
+
+class ParseError : public runtime_error {
 public:
-    string value;
-    IdNode(string v) { value = v; }
-
-    void print(int depth = 0) override {
-        for (int i = 0; i < depth * 3; i++) cout << "-";
-        cout << "IdNode: " << value << endl;
-    }
+    int line;
+    ParseError(int ln, const string& msg) : runtime_error(msg), line(ln) {}
 };
 
-// Binary operation node (e.g., a + b, c * 10)
-class BinOpNode : public ASTNode {
-public:
-    ASTNode* left;
-    string op;
-    ASTNode* right;
-
-    BinOpNode(ASTNode* l, string o, ASTNode* r) {
-        left = l;
-        op = o;
-        right = r;
-    }
-
-    void print(int depth = 0) override {
-        for (int i = 0; i < depth * 3; i++) cout << "-";
-        cout << "BinOpNode: " << op << endl;
-        left->print(depth + 1);
-        right->print(depth + 1);
-    }
-
-    ~BinOpNode() {
-        delete left;
-        delete right;
-    }
-};
-
-
-// Parser Class (Recursive Descent Parser)
-
+// ==========================================
+// 3. Parser Definition
+// ==========================================
 class Parser {
-public:
     vector<Token> tokens;
-    int pos;
+    size_t pos = 0;
+    bool hadError = false;
 
-    Parser(vector<Token> t) {
-        tokens = t;
-        pos = 0;
-    }
-
-    // Current token dekhe
-    Token currentTok() {
-        if (pos < tokens.size()) {
-            return tokens[pos];
-        }
-        return Token(EOF_TOKEN, "", 0);
-    }
-
-    // Porer token e jay
-    void advance() {
-        pos++;
-    }
-
+    const Token& current() const { return tokens[pos < tokens.size() ? pos : tokens.size()-1]; }
+    bool check(TokenType t) const { return current().type == t; }
+    Token advance() { Token t=current(); if (!check(TokenType::End)) ++pos; return t; }
+    bool match(TokenType t) { if (check(t)) { advance(); return true; } return false; }
     
-    // Grammar:
-    // expr  -> term { (+ | -) term }
-    // term  -> factor { (* | /) factor }
-    // factor -> number | identifier | ( expr )
+    Token expect(TokenType t, const string& msg) {
+        if (check(t)) return advance();
+        throw ParseError(current().line, msg);
+    }
     
-
-    // factor: number, identifier, ba (expr)
-    ASTNode* factor() {
-        Token tok = currentTok();
-
-        // Integer literal (e.g., 10)
-        if (tok.type_ == INTEGER_LITERAL) {
+    void synchronize() {
+        while (!check(TokenType::End)) {
+            if (match(TokenType::Semicolon)) return;
+            if (check(TokenType::RBrace)) return;
+            if (check(TokenType::Keyword)) return;
             advance();
-            return new IntNode(tok.value);
         }
-        // Identifier (e.g., a, myVar)
-        else if (tok.type_ == IDENTIFIER) {
-            advance();
-            return new IdNode(tok.value);
+    }
+    
+    unique_ptr<Expr> primary() {
+        if (match(TokenType::Number)) return make_unique<Expr>(Expr::Literal, tokens[pos-1].text);
+        if (match(TokenType::Decimal)) return make_unique<Expr>(Expr::Literal, tokens[pos-1].text);
+        if (match(TokenType::Identifier)) return make_unique<Expr>(Expr::Variable, tokens[pos-1].text);
+        if (match(TokenType::LParen)) {
+            auto e = expression();
+            expect(TokenType::RParen, "Expected ')'");
+            return e;
         }
-        // Parenthesized expression (e.g., (a + b))
-        else if (tok.type_ == LEFT_PAREN) {
-            advance();
-            ASTNode* node = expr();
-            if (currentTok().type_ == RIGHT_PAREN) {
-                advance();
-                return node;
-            } else {
-                cout << "ParseError: Expected ')' at line " << tok.line << endl;
-                return node;
+        throw ParseError(current().line, "Expected a number, variable, or '('");
+    }
+    
+    unique_ptr<Expr> unary() {
+        if (match(TokenType::Minus)) {
+            auto e=make_unique<Expr>(Expr::Unary, "-");
+            e->right=unary(); return e;
+        }
+        return primary();
+    }
+    
+    unique_ptr<Expr> factor() {
+        auto e=unary();
+        while (check(TokenType::Star) || check(TokenType::Slash)) {
+            string op=advance().text;
+            auto n=make_unique<Expr>(Expr::Binary,op);
+            n->left=std::move(e); n->right=unary(); e=std::move(n);
+        }
+        return e;
+    }
+    
+    unique_ptr<Expr> expression() {
+        auto e=factor();
+        while (check(TokenType::Plus) || check(TokenType::Minus)) {
+            string op=advance().text;
+            auto n=make_unique<Expr>(Expr::Binary,op);
+            n->left=std::move(e); n->right=factor(); e=std::move(n);
+        }
+        return e;
+    }
+    
+    unique_ptr<Expr> condition() {
+        auto left=expression();
+        if (check(TokenType::Less) || check(TokenType::Greater) ||
+            check(TokenType::LessEqual) || check(TokenType::GreaterEqual) ||
+            check(TokenType::Equal) || check(TokenType::NotEqual)) {
+            string op=advance().text;
+            auto n=make_unique<Expr>(Expr::Binary,op);
+            n->left=std::move(left); n->right=expression(); return n;
+        }
+        throw ParseError(current().line, "Expected a comparison operator");
+    }
+    
+    vector<unique_ptr<Stmt>> block() {
+        expect(TokenType::LBrace, "Expected '{'");
+        vector<unique_ptr<Stmt>> list;
+        while (!check(TokenType::RBrace) && !check(TokenType::End)) {
+            size_t before=pos;
+            try { list.push_back(statement()); }
+            catch (const ParseError& e) {
+                hadError=true;
+                cerr << "Syntax Error at line " << e.line << ": " << e.what() << '\n';
+                synchronize();
             }
+            if (pos==before && !check(TokenType::End)) advance();
         }
-        else {
-            cout << "ParseError: Unexpected token '" << tok.value << "' at line " << tok.line << endl;
+        expect(TokenType::RBrace, "Expected '}'");
+        return list;
+    }
+    
+    unique_ptr<Stmt> statement() {
+        if (check(TokenType::Keyword) && current().text=="ধরি") {
             advance();
-            return new IntNode("0");  // Error recovery
+            auto s=make_unique<Stmt>(Stmt::Declaration);
+            if (match(TokenType::IntType)) s->declaredType=ValueType::Integer;
+            else if (match(TokenType::FloatType)) s->declaredType=ValueType::Decimal;
+            else throw ParseError(current().line,"Expected data type 'সংখ্যা' or 'দশমিক'");
+            s->name=expect(TokenType::Identifier,"Expected variable name").text;
+            expect(TokenType::Assign,"Expected '='");
+            s->expr=expression();
+            expect(TokenType::Semicolon,"Expected ';'");
+            return s;
         }
+        if (check(TokenType::Keyword) && current().text=="দেখাও") {
+            advance();
+            auto s=make_unique<Stmt>(Stmt::Print);
+            expect(TokenType::LParen,"Expected '(' after দেখাও");
+            s->expr=expression();
+            expect(TokenType::RParen,"Expected ')'");
+            expect(TokenType::Semicolon,"Expected ';'");
+            return s;
+        }
+        if (check(TokenType::Keyword) && current().text=="যদি") {
+            advance();
+            auto s=make_unique<Stmt>(Stmt::If);
+            expect(TokenType::LParen,"Expected '(' after যদি");
+            s->condition=condition();
+            expect(TokenType::RParen,"Expected ')'");
+            s->body=block();
+            if (check(TokenType::Keyword) && current().text=="নাহলে") {
+                advance(); s->elseBody=block();
+            }
+            return s;
+        }
+        if (check(TokenType::Keyword) && current().text=="যতক্ষণ") {
+            advance();
+            auto s=make_unique<Stmt>(Stmt::While);
+            expect(TokenType::LParen,"Expected '(' after যতক্ষণ");
+            s->condition=condition();
+            expect(TokenType::RParen,"Expected ')'");
+            s->body=block();
+            return s;
+        }
+        if (check(TokenType::Identifier)) {
+            auto s=make_unique<Stmt>(Stmt::Assignment);
+            s->name=advance().text;
+            expect(TokenType::Assign,"Expected '=' after variable name");
+            s->expr=expression();
+            expect(TokenType::Semicolon,"Expected ';'");
+            return s;
+        }
+        if (check(TokenType::Invalid))
+            throw ParseError(current().line,"Invalid character: " + current().text);
+        throw ParseError(current().line,"Unexpected token: " + current().text);
     }
 
-    // term: factor { (* | /) factor }
-    ASTNode* term() {
-        ASTNode* left = factor();
-
-        while (currentTok().type_ == MULTIPLY || currentTok().type_ == DIVIDE) {
-            string op = currentTok().type_;
-            advance();
-            ASTNode* right = factor();
-            left = new BinOpNode(left, op, right);
+public:
+    explicit Parser(vector<Token> t) : tokens(std::move(t)) {}
+    
+    vector<unique_ptr<Stmt>> parse() {
+        vector<unique_ptr<Stmt>> result;
+        while (!check(TokenType::End)) {
+            size_t before=pos;
+            try { result.push_back(statement()); }
+            catch (const ParseError& e) {
+                hadError=true;
+                cerr << "Syntax Error at line " << e.line << ": " << e.what() << '\n';
+                synchronize();
+            }
+            if (pos==before && !check(TokenType::End)) advance();
         }
-
-        return left;
-    }
-
-    // expr: term { (+ | -) term }
-    ASTNode* expr() {
-        ASTNode* left = term();
-
-        while (currentTok().type_ == PLUS || currentTok().type_ == MINUS) {
-            string op = currentTok().type_;
-            advance();
-            ASTNode* right = term();
-            left = new BinOpNode(left, op, right);
-        }
-
-        return left;
-    }
-
-    // Main parse function
-    ASTNode* parse() {
-        return expr();
+        if (hadError) throw runtime_error("Parsing failed due to syntax errors.");
+        return result;
     }
 };
-
-
-// Main Function (Demo)
-
-int main() {
-
-    // Test expression
-    string code = "a+b*c+(d-10)";
-
-    cout << "========================================" << endl;
-    cout << "   BANGLA COMPILER - LEXER + PARSER" << endl;
-    cout << "========================================" << endl << endl;
-
-    cout << "=== SOURCE CODE ===" << endl;
-    cout << code << endl << endl;
-
-    // Step 1: Lexical Analysis
-    cout << "=== STEP 1: LEXICAL ANALYSIS (TOKENS) ===" << endl;
-    Lexer lexer(code);
-    vector<Token> tokens = lexer.tokenize();
-
-    for (int i = 0; i < tokens.size(); i++) {
-        tokens[i].print();
-    }
-
-    cout << endl;
-
-    // Step 2: Parsing (AST Generation)
-    cout << "=== STEP 2: PARSING (AST TREE) ===" << endl;
-    Parser parser(tokens);
-    ASTNode* ast = parser.parse();
-
-    cout << "Abstract Syntax Tree:" << endl;
-    ast->print();
-
-    // Cleanup memory
-    delete ast;
-
-    cout << endl;
-    cout << "=== COMPILER FRONTEND COMPLETE ===" << endl;
-
-    return 0;
-}
